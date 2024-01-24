@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 
 const app = express();
 const PORT = 4000;
-const mongoURL = "mongodb://localhost:27017";
+const mongoURL = "mongodb://127.0.0.1:27017";
 const dbName = "quirknotes";
 
 // Connect to MongoDB
@@ -24,7 +24,7 @@ async function connectToMongo() {
   }
 }
 
-connectToMongo();
+await connectToMongo();
 
 // Open Port
 app.listen(PORT, () => {
@@ -38,39 +38,40 @@ const COLLECTIONS = {
   };
 
 // Register a new user
+// Register a new user
 app.post("/registerUser", express.json(), async (req, res) => {
-    try {
-      const { username, password } = req.body;
-  
-      // Basic body request check
-      if (!username || !password) {
-        return res
-          .status(400)
-          .json({ error: "Username and password both needed to register." });
-      }
-  
-      // Checking if username does not already exist in database
-      const userCollection = db.collection(COLLECTIONS.users);
-      const existingUser = await userCollection.findOne({ username });
-      if (existingUser) {
-        return res.status(400).json({ error: "Username already exists." });
-      }
-  
-      // Creating hashed password (search up bcrypt online for more info)
-      // and storing user info in database
-      const hashedPassword = await bcrypt.hash(password, 10);
-      await userCollection.insertOne({
-        username,
-        password: hashedPassword,
-      });
-  
-      // Returning JSON Web Token (search JWT for more explanation)
-      const token = jwt.sign({ username }, "secret-key", { expiresIn: "1h" });
-      res.status(201).json({ response: "User registered successfully.", token });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
+  try {
+    const { username, password } = req.body;
+
+    // Basic body request check
+    if (!username || !password) {
+      return res
+        .status(400)
+        .json({ error: "Username and password both needed to register." });
     }
-  });
+
+    // Checking if username does not already exist in database
+    const userCollection = db.collection(COLLECTIONS.users);
+    const existingUser = await userCollection.findOne({ username });
+    if (existingUser) {
+      return res.status(400).json({ error: "Username already exists." });
+    }
+
+    // Creating hashed password (search up bcrypt online for more info)
+    // and storing user info in database
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await userCollection.insertOne({
+      username,
+      password: hashedPassword,
+    });
+
+    // Returning JSON Web Token (search JWT for more explanation)
+    const token = jwt.sign({ username }, "secret-key", { expiresIn: "1h" });
+    res.status(201).json({ response: "User registered successfully.", token });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Log in an existing user
 app.post("/loginUser", express.json(), async (req, res) => {
@@ -165,6 +166,122 @@ app.get("/getNote/:noteId", express.json(), async (req, res) => {
             .json({ error: "Unable to find note with given ID." });
         }
         res.json({ response: data });
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  //return all the notes belonging to a user
+  app.get("/getAllNotes", express.json(), async (req, res) => {
+    try {
+      // Verify the JWT from the request headers
+      const token = req.headers.authorization.split(" ")[1];
+      jwt.verify(token, "secret-key", async (err, decoded) => {
+        if (err) {
+          return res.status(401).send("Unauthorized.");
+        }
+        // Find notes with given ID
+        const collection = db.collection(COLLECTIONS.notes);
+        const data = await collection.find({
+          username: decoded.username
+        }).toArray();
+        res.json({ response: data });
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  //delete note with given ID
+  app.delete("/deleteNote/:noteId", express.json(), async (req, res) => {
+    try {
+      const noteId = req.params.noteId;
+      if (!ObjectId.isValid(noteId)) {
+        return res.status(400).json({ error: "Bad request in relation to the :noteId URL parameter" });
+      }
+
+      // Verify the JWT from the request headers
+      const token = req.headers.authorization.split(" ")[1];
+      jwt.verify(token, "secret-key", async (err, decoded) => {
+        if (err) {
+          return res.status(401).send("Unauthorized.");
+        }
+
+        // Find and delete note with given ID
+        const collection = db.collection(COLLECTIONS.notes);
+        const result = await collection.deleteOne({
+          username: decoded.username,
+          _id: new ObjectId(noteId),
+        });
+        if (!result.modifiedCount) {
+          return res
+            .status(404)
+            .json({ error: "Note with ID noteId belonging to the user not found" });
+        }
+        res.json({ response: `Document with ID ${noteId} properly deleted.` });
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  //edit note with given ID
+  app.patch("/editNote/:noteId", express.json(), async (req, res) => {
+    try{
+      const noteId = req.params.noteId;
+      const { title, content } = req.body;
+      
+      if (!ObjectId.isValid(noteId)) {
+        return res.status(400).json({ error: "Bad request in relation to the :noteId URL parameter, or the body params" });
+      }
+  
+      // Verify the JWT from the request headers
+      const token = req.headers.authorization.split(" ")[1];
+      jwt.verify(token, "secret-key", async (err, decoded) => {
+        if (err) {
+          return res.status(401).send("Unauthorized.");
+        }
+
+        // Find and edit note with given ID
+        const collection = db.collection(COLLECTIONS.notes);
+        var result = 0;
+        if (!title && !content){ //bad request
+          return res
+            .status(400)
+            .json({error: "Bad request in relation to the :noteId URL parameter, or the body params"});
+
+        }
+        else if (!title){ //only content
+          result = await collection.updateOne({
+            username: decoded.username,
+            _id: new ObjectId(noteId),
+          },{
+            $set: {content: content}
+          });
+        }
+        else if (!content){ //only title
+          result = await collection.updateOne({
+            username: decoded.username,
+            _id: new ObjectId(noteId),
+          },{
+            $set: {title: title}
+          });
+        }
+        else{ //both
+          result = await collection.updateOne({
+            username: decoded.username,
+            _id: new ObjectId(noteId),
+          },{
+            $set: {title: title, content: content}
+          });
+        }
+        if (!result.modifiedCount) {
+          return res
+            .status(404)
+            .json({ error: "Note with ID noteId belonging to the user not found" });
+        }
+        res.json({ response: `Document with ID ${noteId} properly updated.` });
       });
     } catch (error) {
       res.status(500).json({ error: error.message });
